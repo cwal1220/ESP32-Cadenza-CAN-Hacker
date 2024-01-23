@@ -1,2 +1,2 @@
 # ESP32-Cadenza-CAN-Hacker
-ESP32 Cadenza C-CAN Hacker
+Let's Hack Kia Cadenza C-CAN using Lovely ESP32 super mini!
