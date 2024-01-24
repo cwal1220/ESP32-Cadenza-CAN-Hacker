@@ -18,10 +18,19 @@ void SaveString(int startAt, const char *id);
 void ReadString(byte startAt, byte bufor);
 void handleNotFound();
 ICACHE_RAM_ATTR void initDevice();
+void setup_can();
+bool readCanData(uint32_t *rxId, uint8_t *len, uint8_t *rxBuf);
+
 
 #define EEPROM_LENGTH 1024
-#define WEIGHT_TOPIC "WEIGHT_230507/LEFT"
+#define MQTT_TOPIC "CADENZA/CCAN_RX"
 #define BOOT_PIN 9
+
+// MCP2515 Setting
+#define CAN0_INT_PIN 3
+#define CAN0_CS_PIN 7
+MCP_CAN CAN0(CAN0_CS_PIN);
+// MCP2515 End
 
 const char *mqttServer = "138.2.126.137";
 const int mqttPort = 1883;
@@ -34,8 +43,6 @@ char ssid[30];
 char password[30];
 
 bool captive = true;
-
-int count = 0;
 
 WiFiClient espClient;
 PubSubClient client(espClient);
@@ -55,11 +62,6 @@ String responseHTML = ""
                       "<script>function removeSpaces(string) {"
                       "   return string.split(' ').join('');"
                       "}</script></html>";
-
-float getFsrData(int analogPin)
-{
-    return (float)analogPin;
-}
 
 void setup()
 {
@@ -85,9 +87,10 @@ void setup()
         while (!client.connected())
         {
             Serial.println("Connecting to MQTT...");
-            if (client.connect("IOT_WEIGHT_LEFT", mqttUser, mqttPassword))
+            if (client.connect("CAN_HACKER", mqttUser, mqttPassword))
             {
                 Serial.println("connected");
+                setup_can();
             }
             else
             {
@@ -109,13 +112,29 @@ void loop()
     else
     {
         String jsonString;
-        StaticJsonDocument<200> sensorDataJson;
+        StaticJsonDocument<200> canDataJson;
 
-        sensorDataJson["left_0"] = getFsrData(11);
-        sensorDataJson["count"] = count++;
-        serializeJson(sensorDataJson, jsonString);
-        client.publish(WEIGHT_TOPIC, jsonString.c_str());
-        Serial.println(jsonString.c_str());
+        uint32_t rxId;
+        uint8_t rxLen = 0;
+        uint8_t rxBuf[8] = {0x00,};
+        char dataString[64] = {'\0',};
+
+        if(readCanData(&rxId, &rxLen, rxBuf))
+        {
+            for (byte i = 0; i < rxLen; i++)
+            {
+                sprintf(&dataString[i*5], "0x%.2X ", rxBuf[i]);
+            }
+
+            canDataJson["id"] = rxId;
+            canDataJson["len"] = rxLen;
+            canDataJson["data"] = dataString;
+
+            serializeJson(canDataJson, jsonString);
+            client.publish(MQTT_TOPIC, jsonString.c_str());
+            // Debug
+            Serial.println(jsonString.c_str());
+        }
     }
     client.loop();
 }
@@ -145,7 +164,7 @@ void setup_runtime()
     Serial.print("IP address: ");
     Serial.println(WiFi.localIP());
 
-    if (MDNS.begin("IOT_WEIGHT_LEFT"))
+    if (MDNS.begin("CAN_HACKER"))
     {
         Serial.println("MDNS responder started");
     }
@@ -159,7 +178,7 @@ void setup_captive()
 {
     WiFi.mode(WIFI_AP);
     WiFi.softAPConfig(apIP, apIP, IPAddress(255, 255, 255, 0));
-    WiFi.softAP("IOT_WEIGHT_LEFT");
+    WiFi.softAP("CAN_HACKER");
 
     dnsServer.start(DNS_PORT, "*", apIP);
 
@@ -212,7 +231,32 @@ ICACHE_RAM_ATTR void initDevice()
     ESP.restart();
 }
 
-float getWeight()
+void setup_can()
 {
-    return 100;
+    // Initialize MCP2515 running at 16MHz with a baudrate of 500kb/s and the masks and filters disabled.
+    if (CAN0.begin(MCP_ANY, CAN_500KBPS, MCP_8MHZ) == CAN_OK)
+    {
+        Serial.println("MCP2515 Initialized Successfully!");
+    }
+    else
+    {
+        Serial.println("Error Initializing MCP2515...");
+    }
+
+    CAN0.setMode(MCP_NORMAL); // Set operation mode to normal so the MCP2515 sends acks to received data.
+    pinMode(CAN0_INT_PIN, INPUT); // Configuring pin for /INT input
+    Serial.println("MCP2515 Initialize Done!");
+}
+
+bool readCanData(uint32_t *rxId, uint8_t *rxLen, uint8_t *rxBuf)
+{
+    if (!digitalRead(CAN0_INT_PIN)) // If CAN0_INT_PIN pin is low, read receive buffer
+    {
+        CAN0.readMsgBuf(rxId, rxLen, rxBuf);
+        return true;
+    }
+    else
+    {
+        return false;
+    }
 }
